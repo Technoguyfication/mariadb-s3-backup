@@ -2,7 +2,8 @@
 
 import argparse
 import subprocess
-from typing import IO
+from threading import Thread
+import time
 import boto3
 import os
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,17 @@ SYSTEM_DATABASES = {
     "mysql",
     "sys"
 }
+
+class MySQLDumpStream:
+    def __init__(self, process: subprocess.Popen):
+        self.process = process
+        self.num_read = 0
+
+    def read(self, size=-1):
+        """ Read `size` bytes from mysqldump stdout """
+        buffer = self.process.stdout.read(size) if self.process.poll() is None else b''
+        self.num_read += len(buffer)
+        return buffer
 
 class EnvDefault(argparse.Action):
     def __init__(self, envvar, required=True, default=None, **kwargs):
@@ -158,9 +170,19 @@ def main():
 
     print("Streaming mysqldump to S3...")
 
-    # create upload stream to s3
-    s3_client.upload_fileobj(mysqldump.stdout, args.bucket, dump_filename)
+    input_stream = MySQLDumpStream(mysqldump)
 
+    upload_thread = Thread(target=lambda: s3_client.upload_fileobj(input_stream, args.bucket, dump_filename))
+    upload_thread.start()
+
+    while True:
+        print(f"Uploaded {input_stream.num_read} bytes", end='\r')
+        if not upload_thread.is_alive():
+            print()
+            break
+        time.sleep(0.1)
+
+    upload_thread.join()
     mysqldump.wait()
     if mysqldump.returncode != 0:
         raise Exception(f"mysqldump failed: {mysqldump.stderr}")
