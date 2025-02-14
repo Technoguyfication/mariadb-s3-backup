@@ -152,17 +152,30 @@ def main():
         description="Dump local MariaDB and upload to an S3-compatible storage, then clean up old backups.\n" +
             "Every commandline argument can be set using the ENVIRONMENT_VARIABLE in its description."
     )
-    parser.add_argument("-u", "--user", action=EnvDefault, envvar="MYSQL_USER", help="MySQL user name. (MYSQL_USER)")
+    parser.add_argument("--user", action=EnvDefault, envvar="MYSQL_USER", help="MySQL user name. (MYSQL_USER)")
+    parser.add_argument("--password", action=EnvDefault, required=False, envvar="MYSQL_PASSWORD", help="MySQL Password (MYSQL_PASSWORD)")
+    parser.add_argument("--hostname", action=EnvDefault, default="127.0.0.1", envvar="MYSQL_HOSTNAME", help="MySQL Hostname (MYSQL_HOSTNAME)")
+    parser.add_argument("--port", action=EnvDefault, type=int, default=3306, envvar="MYSQL_PORT", help="MySQL Port (MYSQL_PORT)")
     parser.add_argument("--bucket", action=EnvDefault, envvar="S3_BUCKET", help="S3 bucket name (S3_BUCKET)")
     parser.add_argument("--endpoint-url", action=EnvDefault, envvar="S3_ENDPOINT", help="S3-compatible endpoint URL (S3_ENDPOINT)")
-    parser.add_argument("--aws-credentials-file", action=EnvDefault, envvar="AWS_CREDENTIALS_FILE", help="Path to AWS credentials file. Not needed if using AWS_ACCESS_TOKEN and AWS_SECRET_TOKEN (AWS_CREDENTIALS_FILE)")
-    parser.add_argument("--aws-profile", action=EnvDefault, envvar="AWS_PROFILE", help="AWS profile to use within the credentials file (AWS_PROFILE)")
-    parser.add_argument("--access-token", action=EnvDefault, envvar="AWS_ACCESS_TOKEN", help="AWS Access Token for S3")
-    parser.add_argument("--secret-token", action=EnvDefault, envvar="AWS_SECRET_TOKEN", help="AWS Secret Token for S3")
-    parser.add_argument("--prefix", action=EnvDefault, envvar="PREFIX", help="Prefix for backup file names (PREFIX)")
+    parser.add_argument("--prefix", action=EnvDefault, envvar="PREFIX", help="Prefix for backup file names (S3_PREFIX)")
     parser.add_argument("--retention-days", action=EnvDefault, envvar="RETENTION_DAYS", type=int, default=DEFAULT_RETENTION_DAYS, help="Number of days to keep backups (RETENTION_DAYS)")
 
     args = parser.parse_args()
+
+    session = boto3.Session()
+    s3_client = session.client("s3", endpoint_url=args.endpoint_url)
+
+    # print objects in bucket
+    response = s3_client.list_objects_v2(
+                Bucket=args.bucket,
+                # Prefix=args.prefix,
+                # ContinuationToken=continuation_token
+            )
+    
+    print(response)
+
+    return
 
     print("Fetching user databases...")
     user_databases = get_user_databases(args.user, args.socket)
