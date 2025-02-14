@@ -6,7 +6,9 @@ import boto3
 import os
 from datetime import datetime, timedelta
 
-DEFAULT_SOCKET = "/var/run/mysqld/mysqld.sock"
+DEFAULT_HOSTNAME = "127.0.0.1"
+DEFAULT_PORT = 3306
+DEFAULT_USER = "root"
 DEFAULT_RETENTION_DAYS = 7
 
 # System databases we want to exclude
@@ -16,6 +18,20 @@ SYSTEM_DATABASES = {
     "mysql",
     "sys"
 }
+
+class EnvDefault(argparse.Action):
+    def __init__(self, envvar, required=True, default=None, **kwargs):
+        if envvar:
+            if envvar in os.environ:
+                default = os.environ[envvar]
+        if required and default:
+            required = False
+        
+        super(EnvDefault, self).__init__(default=default, required=required, 
+                                         **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
 
 def get_user_databases(user: str, socket: str) -> list:
     """
@@ -133,17 +149,18 @@ def cleanup_old_backups(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Dump local MariaDB and upload to an S3-compatible storage, then clean up old backups."
+        description="Dump local MariaDB and upload to an S3-compatible storage, then clean up old backups.\n" +
+            "Every commandline argument can be set using the ENVIRONMENT_VARIABLE in its description."
     )
-    parser.add_argument("--socket", default=DEFAULT_SOCKET, help="Path to MariaDB socket.")
-    parser.add_argument("--user", default="root", help="MariaDB user for dumping.")
-    parser.add_argument("--bucket", required=True, help="S3 bucket name.")
-    parser.add_argument("--endpoint-url", required=True, help="S3-compatible endpoint URL.")
-    parser.add_argument("--aws-credentials-file", required=True, help="Path to AWS credentials file.")
-    parser.add_argument("--aws-profile", help="AWS profile to use within the credentials file.")
-    parser.add_argument("--prefix", required=True, help="Prefix for backup file names.")
-    parser.add_argument("--retention-days", type=int, default=DEFAULT_RETENTION_DAYS, help="Number of days to keep backups.")
-    parser.add_argument("--output-dir", default="/tmp", help="Directory to place the dump file before upload.")
+    parser.add_argument("-u", "--user", action=EnvDefault, envvar="MYSQL_USER", help="MySQL user name. (MYSQL_USER)")
+    parser.add_argument("--bucket", action=EnvDefault, envvar="S3_BUCKET", help="S3 bucket name (S3_BUCKET)")
+    parser.add_argument("--endpoint-url", action=EnvDefault, envvar="S3_ENDPOINT", help="S3-compatible endpoint URL (S3_ENDPOINT)")
+    parser.add_argument("--aws-credentials-file", action=EnvDefault, envvar="AWS_CREDENTIALS_FILE", help="Path to AWS credentials file. Not needed if using AWS_ACCESS_TOKEN and AWS_SECRET_TOKEN (AWS_CREDENTIALS_FILE)")
+    parser.add_argument("--aws-profile", action=EnvDefault, envvar="AWS_PROFILE", help="AWS profile to use within the credentials file (AWS_PROFILE)")
+    parser.add_argument("--access-token", action=EnvDefault, envvar="AWS_ACCESS_TOKEN", help="AWS Access Token for S3")
+    parser.add_argument("--secret-token", action=EnvDefault, envvar="AWS_SECRET_TOKEN", help="AWS Secret Token for S3")
+    parser.add_argument("--prefix", action=EnvDefault, envvar="PREFIX", help="Prefix for backup file names (PREFIX)")
+    parser.add_argument("--retention-days", action=EnvDefault, envvar="RETENTION_DAYS", type=int, default=DEFAULT_RETENTION_DAYS, help="Number of days to keep backups (RETENTION_DAYS)")
 
     args = parser.parse_args()
 
