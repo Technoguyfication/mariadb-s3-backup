@@ -33,18 +33,29 @@ class EnvDefault(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         setattr(namespace, self.dest, values)
 
-def get_user_databases(user: str, socket: str) -> list:
+def get_user_databases(user: str, password: str | None, hostname: str, port: int) -> list[str]:
     """
     Return a list of non-builtin databases from MariaDB/MySQL.
     """
+
+    auth_args = [
+        f"-u{user}",
+        f"-h{hostname}",
+        f"-P{port}",
+    ]
+
+    if password:
+        auth_args.append(f"--password={password}")
+
     cmd = [
         "mysql",
-        f"-u{user}",
-        f"-S{socket}",
+        *auth_args,
         "-N",            # skip column names
         "-e", "SHOW DATABASES;"
     ]
-    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise Exception(result.stderr)
     all_dbs = result.stdout.strip().split("\n")
     # Filter out system databases
     user_dbs = [db for db in all_dbs if db not in SYSTEM_DATABASES]
@@ -166,22 +177,15 @@ def main():
     session = boto3.Session()
     s3_client = session.client("s3", endpoint_url=args.endpoint_url)
 
-    # print objects in bucket
-    response = s3_client.list_objects_v2(
-                Bucket=args.bucket,
-                # Prefix=args.prefix,
-                # ContinuationToken=continuation_token
-            )
-    
-    print(response)
-
-    return
-
     print("Fetching user databases...")
-    user_databases = get_user_databases(args.user, args.socket)
+    user_databases = get_user_databases(args.user, args.password, args.hostname, args.port)
     if not user_databases:
         print("No user databases found. Exiting.")
         return
+
+    print(f"Found databases: {' '.join(user_databases)}")
+
+    return
 
     timestamp_str = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     dump_filename = f"{args.prefix}-{timestamp_str}.sql"
