@@ -189,14 +189,16 @@ def main():
 
     print("Upload complete.")
 
-    print(f"Cleaning up backups older than {args.retention_days} days...")
-    cleanup_old_backups(
-        bucket=args.bucket,
-        prefix=args.prefix,
-        s3_client=s3_client,
-        retention_days=args.retention_days
-    )
-    print("Cleanup complete.")
+    retention = args.retention_days
+    if retention > 1:
+        print(f"Cleaning up backups older than {args.retention_days} days...")
+        cleanup_old_backups(
+            bucket=args.bucket,
+            prefix=args.prefix,
+            s3_client=s3_client,
+            retention_days=args.retention_days
+        )
+        print("Cleanup complete.")
 
     print("All done.")
 
