@@ -2,9 +2,10 @@
 
 import argparse
 import subprocess
+from typing import IO
 import boto3
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 DEFAULT_HOSTNAME = "127.0.0.1"
 DEFAULT_PORT = 3306
@@ -38,18 +39,12 @@ def get_user_databases(user: str, password: str | None, hostname: str, port: int
     Return a list of non-builtin databases from MariaDB/MySQL.
     """
 
-    auth_args = [
+    cmd = [
+        "mysql",
         f"-u{user}",
         f"-h{hostname}",
         f"-P{port}",
-    ]
-
-    if password:
-        auth_args.append(f"--password={password}")
-
-    cmd = [
-        "mysql",
-        *auth_args,
+        f"--password={password}" if password else "",
         "-N",            # skip column names
         "-e", "SHOW DATABASES;"
     ]
@@ -61,49 +56,21 @@ def get_user_databases(user: str, password: str | None, hostname: str, port: int
     user_dbs = [db for db in all_dbs if db not in SYSTEM_DATABASES]
     return user_dbs
 
-def dump_databases(user: str, socket: str, db_list: list, dump_file: str) -> None:
-    """
-    Dump the given list of databases into the dump_file using mysqldump.
-    """
+def open_dump_process(user: str, password: str, hostname: str, port: int, db_list: list) -> subprocess.Popen:
     if not db_list:
         raise ValueError("No user databases found. Nothing to dump.")
 
     cmd = [
         "mysqldump",
         f"-u{user}",
-        f"-S{socket}",
+        f"-h{hostname}",
+        f"-P{port}",
+        f"--password={password}" if password else "",
         "--databases"
     ] + db_list
 
-    with open(dump_file, "w") as f:
-        subprocess.run(cmd, check=True, stdout=f)
-
-def get_s3_client(endpoint_url: str,
-                   aws_credentials_file: str,
-                   aws_profile: str = None):
-    """
-    Returns an S3 client. We set the AWS_SHARED_CREDENTIALS_FILE env var and
-    optionally use a profile from that file.
-    """
-    os.environ["AWS_SHARED_CREDENTIALS_FILE"] = aws_credentials_file
-
-    if aws_profile:
-        session = boto3.session.Session(profile_name=aws_profile)
-    else:
-        session = boto3.session.Session()
-
-    return session.client("s3", endpoint_url=endpoint_url)
-
-def upload_to_s3(
-    file_path: str,
-    bucket: str,
-    object_name: str,
-    s3_client
-):
-    """
-    Upload a file to an S3-compatible server using the provided s3_client.
-    """
-    s3_client.upload_file(file_path, bucket, object_name)
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    return process
 
 def cleanup_old_backups(
     bucket: str,
@@ -177,41 +144,28 @@ def main():
     session = boto3.Session()
     s3_client = session.client("s3", endpoint_url=args.endpoint_url)
 
-    print("Fetching user databases...")
+    print("Fetching databases...")
     user_databases = get_user_databases(args.user, args.password, args.hostname, args.port)
     if not user_databases:
-        print("No user databases found. Exiting.")
+        print("No non-system databases found. Exiting.")
         return
 
     print(f"Found databases: {' '.join(user_databases)}")
 
-    return
-
-    timestamp_str = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     dump_filename = f"{args.prefix}-{timestamp_str}.sql"
-    dump_filepath = os.path.join(args.output_dir, dump_filename)
+    mysqldump = open_dump_process(args.user, args.password, args.hostname, args.port, user_databases)
 
-    print(f"Dumping databases to {dump_filepath}...")
-    dump_databases(args.user, args.socket, user_databases, dump_filepath)
+    print("Streaming mysqldump to S3...")
 
-    print("Creating S3 client...")
-    s3_client = get_s3_client(
-        endpoint_url=args.endpoint_url,
-        aws_credentials_file=args.aws_credentials_file,
-        aws_profile=args.aws_profile
-    )
+    # create upload stream to s3
+    s3_client.upload_fileobj(mysqldump.stdout, args.bucket, dump_filename)
 
-    print(f"Uploading {dump_filepath} to bucket {args.bucket}...")
-    upload_to_s3(
-        file_path=dump_filepath,
-        bucket=args.bucket,
-        object_name=dump_filename,
-        s3_client=s3_client
-    )
+    mysqldump.wait()
+    if mysqldump.returncode != 0:
+        raise Exception(f"mysqldump failed: {mysqldump.stderr}")
+
     print("Upload complete.")
-
-    print(f"Removing {dump_filepath}")
-    os.remove(dump_filepath)
 
     print(f"Cleaning up backups older than {args.retention_days} days...")
     cleanup_old_backups(
